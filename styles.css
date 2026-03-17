@@ -1,5 +1,5 @@
 :root {
-  font-family: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
   color: #1f2937;
   background-color: #f3f4f6;
 }
@@ -17,7 +17,7 @@ body {
 }
 
 .container {
-  width: min(92vw, 420px);
+  width: min(95vw, 760px);
 }
 
 .card {
@@ -28,7 +28,8 @@ body {
 }
 
 h1,
-h2 {
+h2,
+h3 {
   margin-top: 0;
   margin-bottom: 8px;
 }
@@ -42,6 +43,7 @@ h2 {
 label {
   display: block;
   margin-bottom: 6px;
+  margin-top: 12px;
   font-weight: 600;
 }
 
@@ -61,8 +63,6 @@ input:focus {
 }
 
 button {
-  width: 100%;
-  margin-top: 10px;
   border: 0;
   border-radius: 10px;
   padding: 12px;
@@ -77,6 +77,21 @@ button:hover {
   background: #1d4ed8;
 }
 
+#join-form button,
+.chat-form button,
+.secondary {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.secondary {
+  background: #475569;
+}
+
+.secondary:hover {
+  background: #334155;
+}
+
 .error {
   min-height: 20px;
   color: #dc2626;
@@ -84,6 +99,87 @@ button:hover {
   font-size: 14px;
 }
 
+.room-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.status {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.status-ok {
+  color: #15803d;
+}
+
+.status-bad {
+  color: #b45309;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+}
+
+.members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  min-height: 220px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.members li {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.members li:last-child {
+  border-bottom: 0;
+}
+
+.messages {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  min-height: 220px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.msg {
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.msg time {
+  color: #64748b;
+  margin-right: 6px;
+}
+
+.chat-form {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 8px;
+}
+
 .hidden {
   display: none;
+}
+
+@media (max-width: 700px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
 }
