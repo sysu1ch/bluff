@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>唬牌联机</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="lobbyView" class="panel hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Hu Pai Online</p>
+          <h1>网页版唬牌</h1>
+          <p class="subcopy">支持自定义人数、房间联机、实时质疑。打开浏览器就能开局。</p>
+        </div>
+
+        <div class="forms">
+          <form id="createForm" class="card">
+            <h2>创建房间</h2>
+            <label>
+              昵称
+              <input id="createName" maxlength="16" placeholder="输入昵称" required />
+            </label>
+            <label>
+              房间人数
+              <input id="maxPlayers" type="number" min="2" max="8" value="4" required />
+            </label>
+            <button type="submit">创建</button>
+          </form>
+
+          <form id="joinForm" class="card">
+            <h2>加入房间</h2>
+            <label>
+              昵称
+              <input id="joinName" maxlength="16" placeholder="输入昵称" required />
+            </label>
+            <label>
+              房间码
+              <input id="roomCode" maxlength="5" placeholder="例如 A7K2Q" required />
+            </label>
+            <button type="submit">加入</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="roomView" class="hidden">
+        <div class="topbar">
+          <div>
+            <p class="eyebrow">房间</p>
+            <h2 id="roomTitle">-----</h2>
+          </div>
+          <div class="room-meta">
+            <div class="badge">
+              <span>目标人数</span>
+              <strong id="maxPlayersLabel">4</strong>
+            </div>
+            <div class="badge">
+              <span>牌堆</span>
+              <strong id="tableCount">0</strong>
+            </div>
+            <div class="badge">
+              <span>当前牌面</span>
+              <strong id="currentRank">A</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="layout">
+          <aside class="panel sidebar">
+            <div class="section-head">
+              <h3>玩家</h3>
+              <button id="startGameBtn" class="secondary">开始游戏</button>
+            </div>
+            <div id="playersList" class="players-list"></div>
+            <div class="status-card">
+              <p class="eyebrow">最近动作</p>
+              <p id="lastActionText">等待玩家加入。</p>
+            </div>
+            <div class="status-card">
+              <p class="eyebrow">裁定</p>
+              <p id="resolutionText">暂无。</p>
+            </div>
+          </aside>
+
+          <section class="table-area">
+            <div class="panel center-panel">
+              <div class="section-head">
+                <h3>牌桌</h3>
+                <div class="actions">
+                  <button id="challengeBtn" class="danger">质疑</button>
+                  <button id="passBtn" class="secondary">无人质疑，继续</button>
+                </div>
+              </div>
+              <div class="pile-preview">
+                <div id="pileCards" class="pile-cards"></div>
+              </div>
+              <p id="turnText" class="turn-text">等待开始。</p>
+            </div>
+
+            <div class="panel play-panel">
+              <div class="section-head">
+                <h3>出牌</h3>
+                <span id="handCount">0 张手牌</span>
+              </div>
+              <form id="playForm">
+                <label>
+                  声明牌面
+                  <select id="declaredRank"></select>
+                </label>
+                <div id="selectedInfo" class="selected-info">已选 0 张</div>
+                <button type="submit">出牌</button>
+              </form>
+            </div>
+
+            <div class="panel hand-panel">
+              <div class="section-head">
+                <h3>我的手牌</h3>
+                <button id="clearSelectionBtn" class="ghost" type="button">清空选择</button>
+              </div>
+              <div id="handCards" class="hand-cards"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+  </html>
