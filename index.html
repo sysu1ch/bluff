@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>房间入口</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <section class="card" id="join-card">
+        <h1>加入房间</h1>
+        <p class="subtitle">进入房间前请先输入昵称。</p>
+        <form id="join-form">
+          <label for="nickname">昵称</label>
+          <input
+            id="nickname"
+            name="nickname"
+            type="text"
+            maxlength="20"
+            placeholder="请输入昵称"
+            autocomplete="off"
+            required
+          />
+          <p class="error" id="error-message" role="alert" aria-live="polite"></p>
+          <button type="submit">进入房间</button>
+        </form>
+      </section>
+
+      <section class="card hidden" id="room-card">
+        <h2>欢迎进入房间</h2>
+        <p id="welcome-message"></p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
