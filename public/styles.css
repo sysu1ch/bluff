@@ -265,6 +265,18 @@ label {
   border: 1px solid var(--line);
 }
 
+.status-card button {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.helper-text {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
 .pile-preview {
   min-height: 140px;
   border: 1px dashed rgba(31, 26, 23, 0.18);
@@ -294,6 +306,25 @@ label {
   border-radius: 16px;
   border: 1px solid rgba(31, 26, 23, 0.12);
   background: rgba(255, 252, 245, 0.9);
+}
+
+.mini-card.back {
+  color: rgba(255, 250, 244, 0.95);
+  border-color: rgba(45, 90, 74, 0.5);
+  background:
+    linear-gradient(135deg, rgba(45, 90, 74, 0.96), rgba(24, 55, 44, 0.96)),
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.08),
+      rgba(255, 255, 255, 0.08) 6px,
+      transparent 6px,
+      transparent 12px
+    );
+}
+
+.mini-card.stack-hidden {
+  min-width: 120px;
+  color: var(--muted);
 }
 
 .turn-text {
@@ -350,6 +381,124 @@ label {
   box-shadow: var(--shadow);
 }
 
+.event-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.event-card {
+  min-width: min(560px, calc(100vw - 48px));
+  max-width: 680px;
+  padding: 22px 28px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.18), transparent 58%),
+    rgba(31, 26, 23, 0.9);
+  color: #fffaf4;
+  box-shadow: 0 24px 80px rgba(31, 26, 23, 0.38);
+  text-align: center;
+  font-size: clamp(1.5rem, 3vw, 2.4rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  animation: event-pop 180ms ease-out;
+}
+
+.event-card.play {
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.16), transparent 58%),
+    linear-gradient(135deg, rgba(45, 90, 74, 0.96), rgba(24, 55, 44, 0.96));
+}
+
+.event-card.success {
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.18), transparent 58%),
+    linear-gradient(135deg, rgba(45, 90, 74, 0.98), rgba(18, 77, 58, 0.98));
+}
+
+.event-card.fail {
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.16), transparent 58%),
+    linear-gradient(135deg, rgba(132, 32, 41, 0.98), rgba(88, 15, 27, 0.98));
+}
+
+.event-card.collect {
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.18), transparent 58%),
+    linear-gradient(135deg, rgba(166, 63, 47, 0.98), rgba(117, 41, 28, 0.98));
+}
+
+.result-modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(31, 26, 23, 0.42);
+  backdrop-filter: blur(6px);
+  z-index: 30;
+}
+
+.result-card {
+  width: min(560px, calc(100vw - 32px));
+  padding: 28px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.18), transparent 54%),
+    linear-gradient(180deg, rgba(255, 252, 245, 0.98), rgba(242, 232, 216, 0.98));
+  box-shadow: 0 32px 100px rgba(31, 26, 23, 0.28);
+}
+
+.result-card h3 {
+  margin: 8px 0 18px;
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+}
+
+.result-rankings {
+  display: grid;
+  gap: 10px;
+}
+
+.result-rank-row {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid var(--line);
+}
+
+.result-rank-row.top {
+  background: linear-gradient(135deg, rgba(166, 63, 47, 0.14), rgba(45, 90, 74, 0.16));
+  border-color: rgba(166, 63, 47, 0.26);
+}
+
+.result-hint {
+  margin: 18px 0 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+@keyframes event-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: 1fr;
@@ -382,5 +531,20 @@ label {
   .actions button,
   .section-head button {
     flex: 1 1 auto;
+  }
+
+  .event-card {
+    border-radius: 24px;
+    padding: 18px 20px;
+    font-size: clamp(1.25rem, 6vw, 1.8rem);
+  }
+
+  .result-card {
+    padding: 22px 18px;
+    border-radius: 24px;
+  }
+
+  .result-rank-row {
+    grid-template-columns: 52px 1fr;
   }
 }

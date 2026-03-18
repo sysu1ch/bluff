@@ -8,22 +8,32 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
 const rooms = new Map();
 const clients = new Map();
 
 const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
 const SUITS = ["S", "H", "D", "C"];
+const SUIT_LABELS = { S: "♠", H: "♥", D: "♦", C: "♣" };
+const JOKERS = [
+  { id: "JOKER_SMALL", rank: "JOKER", suit: "SMALL", wild: true },
+  { id: "JOKER_BIG", rank: "JOKER", suit: "BIG", wild: true },
+];
 const MAX_PLAYERS = 8;
 const MIN_PLAYERS = 2;
+const MAX_NAME_LENGTH = 16;
+const REVEAL_MS = 2000;
+const DECISION_MS = 20000;
+const MAX_EVENT_LOG = 16;
 
 app.use(express.static(path.join(__dirname, "public")));
 
 function shuffle(items) {
   const deck = [...items];
-  for (let i = deck.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
+  for (let index = deck.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [deck[index], deck[swapIndex]] = [deck[swapIndex], deck[index]];
   }
   return deck;
 }
@@ -35,6 +45,7 @@ function makeDeck() {
       deck.push({ id: `${rank}${suit}`, rank, suit });
     }
   }
+  deck.push(...JOKERS.map((card) => ({ ...card })));
   return shuffle(deck);
 }
 
@@ -47,18 +58,34 @@ function generateRoomCode() {
   return code;
 }
 
+function normalizeName(rawName) {
+  const name = String(rawName || "").trim().slice(0, MAX_NAME_LENGTH);
+  if (!name) {
+    throw new Error("请输入昵称");
+  }
+  return name;
+}
+
 function cardLabel(card) {
-  const suitLabel = { S: "♠", H: "♥", D: "♦", C: "♣" };
-  return `${card.rank}${suitLabel[card.suit]}`;
+  if (card.rank === "JOKER") {
+    return card.suit === "BIG" ? "大王" : "小王";
+  }
+  return `${card.rank}${SUIT_LABELS[card.suit]}`;
 }
 
 function sortHand(hand) {
-  hand.sort((a, b) => {
-    const rankDiff = RANKS.indexOf(a.rank) - RANKS.indexOf(b.rank);
+  hand.sort((left, right) => {
+    if (left.rank === "JOKER" || right.rank === "JOKER") {
+      if (left.rank === right.rank) {
+        return left.suit.localeCompare(right.suit);
+      }
+      return left.rank === "JOKER" ? 1 : -1;
+    }
+    const rankDiff = RANKS.indexOf(left.rank) - RANKS.indexOf(right.rank);
     if (rankDiff !== 0) {
       return rankDiff;
     }
-    return SUITS.indexOf(a.suit) - SUITS.indexOf(b.suit);
+    return SUITS.indexOf(left.suit) - SUITS.indexOf(right.suit);
   });
 }
 
@@ -69,17 +96,20 @@ function activePlayers(room) {
 function nextActivePlayer(room, currentIndex) {
   const total = room.players.length;
   for (let step = 1; step <= total; step += 1) {
-    const idx = (currentIndex + step) % total;
-    if (room.players[idx].hand.length > 0) {
-      return idx;
+    const index = (currentIndex + step) % total;
+    if (room.players[index].hand.length > 0) {
+      return index;
     }
   }
   return currentIndex;
 }
 
-function rankAfter(rank) {
-  const index = RANKS.indexOf(rank);
-  return RANKS[(index + 1) % RANKS.length];
+function playerIndex(room, playerId) {
+  return room.players.findIndex((player) => player.id === playerId);
+}
+
+function currentPlayer(room) {
+  return room.players[room.game.currentPlayerIndex] || null;
 }
 
 function createRoom(playerId, name, maxPlayers) {
@@ -92,16 +122,93 @@ function createRoom(playerId, name, maxPlayers) {
     game: {
       started: false,
       currentPlayerIndex: 0,
-      currentRank: "A",
-      pile: [],
-      pendingChallenge: null,
+      currentRank: null,
+      tableCards: [],
+      discardPile: [],
+      lastPlay: null,
+      revealState: null,
+      decisionDeadlineAt: null,
+      decisionTimer: null,
+      revealTimer: null,
       lastAction: null,
       lastResolution: null,
       winnerId: null,
+      finishOrder: [],
+      eventLog: [],
+      nextEventId: 1,
     },
   };
   rooms.set(code, room);
   return room;
+}
+
+function pushGameEvent(room, event) {
+  room.game.eventLog.push({
+    id: room.game.nextEventId,
+    ...event,
+  });
+  room.game.nextEventId += 1;
+  if (room.game.eventLog.length > MAX_EVENT_LOG) {
+    room.game.eventLog.splice(0, room.game.eventLog.length - MAX_EVENT_LOG);
+  }
+}
+
+function viewerEventFor(event, viewerId) {
+  if (event.kind === "play") {
+    const actorLabel = event.actorId === viewerId ? "\u4f60" : event.actorName;
+    return {
+      id: event.id,
+      tone: "play",
+      message: `${actorLabel}\u51fa\u4e86 ${event.declaredCount} \u5f20\uff0c\u58f0\u660e ${event.declaredRank}`,
+    };
+  }
+
+  if (event.kind === "challenge-resolution") {
+    const viewerIsChallenger = event.challengerId === viewerId;
+    const viewerIsActor = event.actorId === viewerId;
+
+    if (viewerIsChallenger) {
+      return {
+        id: event.id,
+        tone: event.truthful ? "fail" : "success",
+        message: event.truthful
+          ? `\u88ab ${event.actorName} \u9a97\u4e86`
+          : `\u8bc6\u7834\u4e86 ${event.actorName}`,
+        durationMs: 1500,
+      };
+    }
+
+    if (viewerIsActor) {
+      return {
+        id: event.id,
+        tone: event.truthful ? "success" : "fail",
+        message: event.truthful
+          ? `\u9a97\u5230 ${event.challengerName} \u4e86\uff01`
+          : `\u88ab ${event.challengerName} \u8bc6\u7834\u4e86\uff01`,
+        durationMs: 1500,
+      };
+    }
+
+    return {
+      id: event.id,
+      tone: event.truthful ? "fail" : "success",
+      message: event.truthful
+        ? `${event.challengerName}\u8d28\u7591\u5931\u8d25`
+        : `${event.challengerName}\u8d28\u7591\u6210\u529f`,
+      durationMs: 1500,
+    };
+  }
+
+  if (event.kind === "collect") {
+    const collectorLabel = event.collectorId === viewerId ? "\u4f60" : event.collectorName;
+    return {
+      id: event.id,
+      tone: "collect",
+      message: `${collectorLabel}\u6536\u4e0b ${event.cardCount} \u5f20\u724c`,
+    };
+  }
+
+  return null;
 }
 
 function joinRoom(room, playerId, name) {
@@ -138,21 +245,112 @@ function updateWinner(room) {
   }
 }
 
+function rankingsFor(room) {
+  const finishedIds = new Set(room.game.finishOrder);
+  const finishedPlayers = room.game.finishOrder
+    .map((playerId) => room.players.find((player) => player.id === playerId))
+    .filter(Boolean);
+  const unfinishedPlayers = room.players
+    .filter((player) => !finishedIds.has(player.id))
+    .sort((left, right) => {
+      if (left.hand.length !== right.hand.length) {
+        return left.hand.length - right.hand.length;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+  return [...finishedPlayers, ...unfinishedPlayers].map((player, index) => ({
+    rank: index + 1,
+    id: player.id,
+    name: player.name,
+    handCount: player.hand.length,
+    isViewer: false,
+  }));
+}
+
+function clearDecisionTimer(room) {
+  if (room.game.decisionTimer) {
+    clearTimeout(room.game.decisionTimer);
+    room.game.decisionTimer = null;
+  }
+  room.game.decisionDeadlineAt = null;
+}
+
+function clearRevealTimer(room) {
+  if (room.game.revealTimer) {
+    clearTimeout(room.game.revealTimer);
+    room.game.revealTimer = null;
+  }
+}
+
+function clearRoundState(room) {
+  clearDecisionTimer(room);
+  clearRevealTimer(room);
+  room.game.currentRank = null;
+  room.game.tableCards = [];
+  room.game.lastPlay = null;
+  room.game.revealState = null;
+}
+
 function startGame(room) {
   dealCards(room);
   room.game.started = true;
   room.game.currentPlayerIndex = 0;
-  room.game.currentRank = "A";
-  room.game.pile = [];
-  room.game.pendingChallenge = null;
+  clearRoundState(room);
+  room.game.discardPile = [];
   room.game.lastAction = null;
   room.game.lastResolution = null;
   room.game.winnerId = null;
+  room.game.finishOrder = [];
+}
+
+function currentPlayFor(room) {
+  if (room.game.revealState) {
+    return {
+      status: "revealed",
+      actorName: room.game.revealState.actorName,
+      declaredRank: room.game.revealState.declaredRank,
+      declaredCount: room.game.revealState.declaredCount,
+      cards: room.game.revealState.cards.map(cardLabel),
+    };
+  }
+
+  if (room.game.lastPlay) {
+    return {
+      status: "hidden",
+      actorName: room.game.lastPlay.actorName,
+      declaredRank: room.game.lastPlay.declaredRank,
+      declaredCount: room.game.lastPlay.declaredCount,
+      cards: [],
+    };
+  }
+
+  return null;
 }
 
 function roomStateFor(room, viewerId) {
   const viewer = room.players.find((player) => player.id === viewerId);
-  const currentPlayer = room.players[room.game.currentPlayerIndex];
+  const actorId = room.game.lastPlay?.actorId || null;
+  const currentPlayerEntry = currentPlayer(room);
+  const canAct = room.game.started && currentPlayerEntry?.id === viewerId && !room.game.revealState;
+  const canChallenge = canAct && Boolean(room.game.lastPlay) && actorId !== viewerId;
+  const canPass = canAct && Boolean(room.game.lastPlay) && actorId !== viewerId;
+  const canPlay = canAct;
+  const pendingChallenge = room.game.lastPlay
+    ? {
+        actorId: room.game.lastPlay.actorId,
+        actorName: room.game.lastPlay.actorName,
+        declaredRank: room.game.lastPlay.declaredRank,
+        declaredCount: room.game.lastPlay.declaredCount,
+        responseDeadlineAt: room.game.decisionDeadlineAt,
+      }
+    : null;
+  const events = room.game.eventLog.map((event) => viewerEventFor(event, viewerId)).filter(Boolean);
+  const rankings = rankingsFor(room).map((entry) => ({
+    ...entry,
+    isViewer: entry.id === viewerId,
+  }));
+
   return {
     roomCode: room.code,
     maxPlayers: room.maxPlayers,
@@ -170,27 +368,20 @@ function roomStateFor(room, viewerId) {
       finished: room.game.started && player.hand.length === 0,
     })),
     hand: (viewer?.hand || []).map((card) => ({ ...card, label: cardLabel(card) })),
-    tableCount: room.game.pile.length,
-    pilePreview: room.game.pile.slice(-3).map(cardLabel),
+    tableCount: room.game.tableCards.length + (room.game.lastPlay?.cards.length || 0),
+    currentPlay: currentPlayFor(room),
     currentRank: room.game.currentRank,
-    currentPlayerId: currentPlayer?.id || null,
-    pendingChallenge: room.game.pendingChallenge
-      ? {
-          actorId: room.game.pendingChallenge.actorId,
-          actorName: room.game.pendingChallenge.actorName,
-          declaredRank: room.game.pendingChallenge.declaredRank,
-          declaredCount: room.game.pendingChallenge.declaredCount,
-        }
-      : null,
+    currentPlayerId: currentPlayerEntry?.id || null,
+    pendingChallenge,
     canStart:
       viewerId === room.hostId &&
       !room.game.started &&
       room.players.length >= MIN_PLAYERS &&
       room.players.length <= room.maxPlayers,
-    canChallenge:
-      room.game.started &&
-      Boolean(room.game.pendingChallenge) &&
-      room.game.pendingChallenge.actorId !== viewerId,
+    canRename: Boolean(viewer) && !room.game.started,
+    canPlay,
+    canChallenge,
+    canPass,
     lastAction: room.game.lastAction
       ? {
           actorName: room.game.lastAction.actorName,
@@ -199,7 +390,9 @@ function roomStateFor(room, viewerId) {
         }
       : null,
     lastResolution: room.game.lastResolution,
+    events,
     winner: room.game.winnerId,
+    rankings,
   };
 }
 
@@ -222,38 +415,148 @@ function broadcastRoom(room) {
   }
 }
 
-function ensurePlayerTurn(room, playerId) {
+function scheduleDecision(room) {
+  clearDecisionTimer(room);
+  if (!room.game.lastPlay || room.game.revealState) {
+    return;
+  }
+  room.game.decisionDeadlineAt = Date.now() + DECISION_MS;
+  room.game.decisionTimer = setTimeout(() => {
+    autoPassTurn(room);
+  }, DECISION_MS);
+}
+
+function ensureCanPlay(room, playerId) {
   if (!room.game.started) {
     throw new Error("游戏尚未开始");
   }
-  const currentPlayer = room.players[room.game.currentPlayerIndex];
-  if (!currentPlayer || currentPlayer.id !== playerId) {
+  if (room.game.revealState) {
+    throw new Error("当前正在公开牌面");
+  }
+  if (currentPlayer(room)?.id !== playerId) {
     throw new Error("还没轮到你");
   }
-  if (room.game.pendingChallenge) {
-    throw new Error("当前需要先处理质疑");
+}
+
+function moveAllTableCardsToDiscard(room) {
+  room.game.discardPile.push(...room.game.tableCards);
+  if (room.game.lastPlay) {
+    room.game.discardPile.push(...room.game.lastPlay.cards);
   }
-  return currentPlayer;
+}
+
+function collectAllTableCards(room, playerId) {
+  const player = room.players.find((entry) => entry.id === playerId);
+  if (!player) {
+    return;
+  }
+  player.hand.push(...room.game.tableCards);
+  if (room.game.lastPlay) {
+    player.hand.push(...room.game.lastPlay.cards);
+  }
+  sortHand(player.hand);
+}
+
+function beginNextRound(room, leaderId, resolutionText) {
+  const leaderIndex = playerIndex(room, leaderId);
+  if (leaderIndex === -1) {
+    return;
+  }
+  clearRoundState(room);
+  room.game.currentPlayerIndex = leaderIndex;
+  room.game.lastResolution = resolutionText;
+  updateWinner(room);
+  broadcastRoom(room);
+}
+
+function clearTableForRoundWinner(room, leaderId) {
+  moveAllTableCardsToDiscard(room);
+  beginNextRound(room, leaderId, "其他玩家都选择不出，牌桌上的牌已进入弃牌堆。");
+}
+
+function advanceAfterPass(room) {
+  const nextIndex = nextActivePlayer(room, room.game.currentPlayerIndex);
+  const nextPlayerId = room.players[nextIndex]?.id;
+  if (nextPlayerId && nextPlayerId === room.game.lastPlay?.actorId) {
+    clearTableForRoundWinner(room, nextPlayerId);
+    return;
+  }
+  room.game.currentPlayerIndex = nextIndex;
+  room.game.lastResolution = "有玩家选择不出。";
+  scheduleDecision(room);
+  broadcastRoom(room);
+}
+
+function autoPassTurn(room) {
+  if (!room.game.started || room.game.revealState || !room.game.lastPlay) {
+    return;
+  }
+  if (currentPlayer(room)?.id === room.game.lastPlay.actorId) {
+    return;
+  }
+  advanceAfterPass(room);
+}
+
+function finishChallengeResolution(room, challengerId) {
+  const lastPlay = room.game.lastPlay;
+  if (!lastPlay) {
+    return;
+  }
+
+  const challenger = room.players.find((player) => player.id === challengerId);
+  const challengerName = challenger?.name || "有玩家";
+  const truthful = lastPlay.cards.every((card) => card.rank === lastPlay.declaredRank || card.rank === "JOKER");
+  const collectorId = truthful ? challengerId : lastPlay.actorId;
+  const nextLeaderId = truthful ? lastPlay.actorId : challengerId;
+
+  const collectorName = truthful ? challengerName : lastPlay.actorName;
+  const cardCount = room.game.tableCards.length + lastPlay.cards.length;
+  const resolutionText = truthful
+    ? `${challengerName} \u8d28\u7591\u5931\u8d25\uff0c\u6536\u8d70\u724c\u684c\u4e0a\u7684\u6240\u6709\u724c\u3002`
+    : `${challengerName} \u8d28\u7591\u6210\u529f\uff0c${lastPlay.actorName} \u6536\u8d70\u724c\u684c\u4e0a\u7684\u6240\u6709\u724c\u3002`;
+
+  pushGameEvent(room, {
+    kind: "challenge-resolution",
+    truthful,
+    challengerId,
+    challengerName,
+    actorId: lastPlay.actorId,
+    actorName: lastPlay.actorName,
+  });
+  pushGameEvent(room, {
+    kind: "collect",
+    collectorId,
+    collectorName,
+    cardCount,
+  });
+
+  collectAllTableCards(room, collectorId);
+  beginNextRound(room, nextLeaderId, resolutionText);
+  return;
 }
 
 function playCards(room, playerId, cardIds, declaredRank) {
-  const player = ensurePlayerTurn(room, playerId);
+  ensureCanPlay(room, playerId);
 
   if (!Array.isArray(cardIds) || cardIds.length < 1) {
     throw new Error("至少选择一张牌");
   }
-  if (cardIds.length > 4) {
+  if (false && cardIds.length > 4) {
     throw new Error("单次最多出四张牌");
   }
   if (!RANKS.includes(declaredRank)) {
     throw new Error("声明牌面无效");
   }
+  if (room.game.currentRank && declaredRank !== room.game.currentRank) {
+    throw new Error("跟牌时必须沿用本轮牌面");
+  }
 
   const uniqueIds = [...new Set(cardIds)];
   if (uniqueIds.length !== cardIds.length) {
-    throw new Error("出牌包含重复项");
+    throw new Error("出牌包含重复项目");
   }
 
+  const player = room.players[playerIndex(room, playerId)];
   const cards = uniqueIds.map((id) => {
     const card = player.hand.find((entry) => entry.id === id);
     if (!card) {
@@ -263,70 +566,85 @@ function playCards(room, playerId, cardIds, declaredRank) {
   });
 
   player.hand = player.hand.filter((card) => !uniqueIds.includes(card.id));
-  room.game.pile.push(...cards);
-  room.game.pendingChallenge = {
+  if (player.hand.length === 0 && !room.game.finishOrder.includes(player.id)) {
+    room.game.finishOrder.push(player.id);
+  }
+  if (room.game.lastPlay) {
+    room.game.tableCards.push(...room.game.lastPlay.cards);
+  }
+
+  room.game.currentRank = room.game.currentRank || declaredRank;
+  room.game.lastPlay = {
     actorId: player.id,
     actorName: player.name,
     declaredRank,
     declaredCount: cards.length,
     cards,
   };
-  room.game.lastAction = room.game.pendingChallenge;
+  room.game.lastAction = {
+    actorName: player.name,
+    declaredRank,
+    declaredCount: cards.length,
+  };
+  pushGameEvent(room, {
+    kind: "play",
+    actorId: player.id,
+    actorName: player.name,
+    declaredRank,
+    declaredCount: cards.length,
+  });
   room.game.lastResolution = null;
-}
-
-function collectPile(room, playerId) {
-  const player = room.players.find((entry) => entry.id === playerId);
-  if (!player) {
-    return;
-  }
-  player.hand.push(...room.game.pile);
-  sortHand(player.hand);
-  room.game.pile = [];
-}
-
-function finalizeTurn(room) {
-  const currentIndex = room.game.currentPlayerIndex;
-  room.game.pendingChallenge = null;
-  room.game.currentPlayerIndex = nextActivePlayer(room, currentIndex);
-  room.game.currentRank = rankAfter(room.game.currentRank);
+  room.game.currentPlayerIndex = nextActivePlayer(room, room.game.currentPlayerIndex);
+  scheduleDecision(room);
   updateWinner(room);
+  broadcastRoom(room);
 }
 
 function challenge(room, challengerId) {
-  const pending = room.game.pendingChallenge;
-  if (!pending) {
-    throw new Error("当前没有可质疑的出牌");
+  ensureCanPlay(room, challengerId);
+  const lastPlay = room.game.lastPlay;
+  if (!lastPlay) {
+    throw new Error("当前没有可质疑的上一手");
   }
-  if (pending.actorId === challengerId) {
+  if (lastPlay.actorId === challengerId) {
     throw new Error("不能质疑自己");
   }
 
-  const challenger = room.players.find((player) => player.id === challengerId);
-  const truthful = pending.cards.every((card) => card.rank === pending.declaredRank);
-  const receiverId = truthful ? challengerId : pending.actorId;
-
-  collectPile(room, receiverId);
-  room.game.lastResolution = truthful
-    ? `${challenger.name} 质疑失败，收走整叠牌。`
-    : `${challenger.name} 质疑成功，${pending.actorName} 收走整叠牌。`;
-  room.game.pendingChallenge = null;
-  room.game.currentPlayerIndex = nextActivePlayer(
-    room,
-    room.players.findIndex((player) => player.id === receiverId)
-  );
-  room.game.currentRank = rankAfter(room.game.currentRank);
-  updateWinner(room);
+  clearDecisionTimer(room);
+  room.game.revealState = {
+    actorName: lastPlay.actorName,
+    declaredRank: lastPlay.declaredRank,
+    declaredCount: lastPlay.declaredCount,
+    cards: lastPlay.cards,
+  };
+  room.game.lastResolution = "已发起质疑，正在公开上一手牌。";
+  broadcastRoom(room);
+  clearRevealTimer(room);
+  room.game.revealTimer = setTimeout(() => {
+    finishChallengeResolution(room, challengerId);
+  }, REVEAL_MS);
 }
 
-function passWindow(room, playerId) {
-  if (!room.game.pendingChallenge) {
-    throw new Error("当前没有待处理的质疑窗口");
+function passTurn(room, playerId) {
+  ensureCanPlay(room, playerId);
+  if (!room.game.lastPlay) {
+    throw new Error("新一轮开始时首家必须先出牌");
   }
-  if (room.game.pendingChallenge.actorId !== playerId) {
-    throw new Error("只有出牌玩家可以结束质疑窗口");
+  if (room.game.lastPlay.actorId === playerId) {
+    throw new Error("当前不能选择不出");
   }
-  finalizeTurn(room);
+  advanceAfterPass(room);
+}
+
+function renamePlayer(room, playerId, name) {
+  if (room.game.started) {
+    throw new Error("游戏开始后不能修改昵称");
+  }
+  const player = room.players.find((entry) => entry.id === playerId);
+  if (!player) {
+    throw new Error("玩家不存在");
+  }
+  player.name = name;
 }
 
 function handleDisconnect(playerId) {
@@ -351,11 +669,23 @@ function handleDisconnect(playerId) {
     room.hostId = nextHost?.id || room.hostId;
   }
 
-  broadcastRoom(room);
-
   if (room.players.every((entry) => !entry.connected)) {
+    clearRoundState(room);
     rooms.delete(room.code);
+    return;
   }
+
+  if (room.game.started && !room.game.revealState && currentPlayer(room)?.id === playerId) {
+    if (room.game.lastPlay && room.game.lastPlay.actorId !== playerId) {
+      advanceAfterPass(room);
+      return;
+    }
+    if (!room.game.lastPlay) {
+      room.game.currentPlayerIndex = nextActivePlayer(room, room.game.currentPlayerIndex);
+    }
+  }
+
+  broadcastRoom(room);
 }
 
 function handleAuthedMessage(ws, room, playerId, message) {
@@ -373,18 +703,21 @@ function handleAuthedMessage(ws, room, playerId, message) {
 
   if (message.type === "play-cards") {
     playCards(room, playerId, message.cardIds, message.declaredRank);
-    broadcastRoom(room);
     return;
   }
 
   if (message.type === "challenge") {
     challenge(room, playerId);
-    broadcastRoom(room);
     return;
   }
 
   if (message.type === "pass-window") {
-    passWindow(room, playerId);
+    passTurn(room, playerId);
+    return;
+  }
+
+  if (message.type === "rename-player") {
+    renamePlayer(room, playerId, normalizeName(message.name));
     broadcastRoom(room);
     return;
   }
@@ -408,11 +741,8 @@ function handleMessage(ws, raw) {
 
   try {
     if (message.type === "create-room") {
-      const name = String(message.name || "").trim().slice(0, 16);
+      const name = normalizeName(message.name);
       const maxPlayers = Number(message.maxPlayers);
-      if (!name) {
-        throw new Error("请输入昵称");
-      }
       if (!Number.isInteger(maxPlayers) || maxPlayers < MIN_PLAYERS || maxPlayers > MAX_PLAYERS) {
         throw new Error(`人数范围为 ${MIN_PLAYERS}-${MAX_PLAYERS}`);
       }
@@ -426,14 +756,11 @@ function handleMessage(ws, raw) {
     }
 
     if (message.type === "join-room") {
-      const name = String(message.name || "").trim().slice(0, 16);
+      const name = normalizeName(message.name);
       const roomCode = String(message.roomCode || "").trim().toUpperCase();
       const room = rooms.get(roomCode);
       if (!room) {
         throw new Error("房间不存在");
-      }
-      if (!name) {
-        throw new Error("请输入昵称");
       }
 
       const playerId = crypto.randomUUID();
@@ -469,6 +796,6 @@ wss.on("connection", (ws) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Hu Pai server running at http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Hu Pai server running at http://${HOST}:${PORT}`);
 });

@@ -12,7 +12,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Hu Pai Online</p>
           <h1>网页版唬牌</h1>
-          <p class="subcopy">支持自定义人数、房间联机、实时质疑。打开浏览器就能开局。</p>
+          <p class="subcopy">支持自定义人数、房间联机、实时质疑。加入房间前先输入昵称，朋友通过同一个公网地址就能一起开局。</p>
         </div>
 
         <div class="forms">
@@ -20,7 +20,7 @@
             <h2>创建房间</h2>
             <label>
               昵称
-              <input id="createName" maxlength="16" placeholder="输入昵称" required />
+              <input id="createName" maxlength="16" placeholder="输入昵称后创建房间" required />
             </label>
             <label>
               房间人数
@@ -33,7 +33,7 @@
             <h2>加入房间</h2>
             <label>
               昵称
-              <input id="joinName" maxlength="16" placeholder="输入昵称" required />
+              <input id="joinName" maxlength="16" placeholder="加入前先输入昵称" required />
             </label>
             <label>
               房间码
@@ -60,8 +60,8 @@
               <strong id="tableCount">0</strong>
             </div>
             <div class="badge">
-              <span>当前牌面</span>
-              <strong id="currentRank">A</strong>
+              <span>本轮牌面</span>
+              <strong id="currentRank">待选</strong>
             </div>
           </div>
         </div>
@@ -73,6 +73,15 @@
               <button id="startGameBtn" class="secondary">开始游戏</button>
             </div>
             <div id="playersList" class="players-list"></div>
+            <form id="renameForm" class="status-card hidden">
+              <p class="eyebrow">我的昵称</p>
+              <label>
+                昵称
+                <input id="renameName" maxlength="16" placeholder="大厅期可修改昵称" />
+              </label>
+              <p id="renameHint" class="helper-text">大厅期可修改昵称，开局后会锁定。</p>
+              <button id="renameBtn" type="submit" class="ghost">修改昵称</button>
+            </form>
             <div class="status-card">
               <p class="eyebrow">最近动作</p>
               <p id="lastActionText">等待玩家加入。</p>
@@ -89,7 +98,7 @@
                 <h3>牌桌</h3>
                 <div class="actions">
                   <button id="challengeBtn" class="danger">质疑</button>
-                  <button id="passBtn" class="secondary">无人质疑，继续</button>
+                  <button id="passBtn" class="secondary">不出</button>
                 </div>
               </div>
               <div class="pile-preview">
@@ -125,7 +134,18 @@
       </section>
     </main>
 
+    <div id="eventOverlay" class="event-overlay hidden" aria-live="polite">
+      <div id="eventCard" class="event-card"></div>
+    </div>
+    <div id="resultModal" class="result-modal hidden" aria-live="polite">
+      <div id="resultCard" class="result-card">
+        <p class="eyebrow">结算</p>
+        <h3 id="resultTitle">本局结束</h3>
+        <div id="resultRankings" class="result-rankings"></div>
+        <p class="result-hint">点击任意位置关闭</p>
+      </div>
+    </div>
     <div id="toast" class="toast hidden"></div>
     <script src="/app.js"></script>
   </body>
-  </html>
+</html>
