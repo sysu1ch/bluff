@@ -93,11 +93,36 @@ function activePlayers(room) {
   return room.players.filter((player) => player.hand.length > 0).length;
 }
 
+function activePlayerEntries(room) {
+  return room.players.filter((player) => player.hand.length > 0);
+}
+
+function finishedPlayerIds(room) {
+  return new Set(room.game.finishOrder);
+}
+
+function pendingFinishIds(room) {
+  return new Set(room.game.pendingFinishOrder);
+}
+
 function nextActivePlayer(room, currentIndex) {
   const total = room.players.length;
   for (let step = 1; step <= total; step += 1) {
     const index = (currentIndex + step) % total;
     if (room.players[index].hand.length > 0) {
+      return index;
+    }
+  }
+  return currentIndex;
+}
+
+function nextResponderIndex(room, currentIndex) {
+  const total = room.players.length;
+  const actorId = room.game.lastPlay?.actorId;
+  for (let step = 1; step <= total; step += 1) {
+    const index = (currentIndex + step) % total;
+    const player = room.players[index];
+    if (player.id === actorId || player.hand.length > 0) {
       return index;
     }
   }
@@ -134,6 +159,8 @@ function createRoom(playerId, name, maxPlayers) {
       lastResolution: null,
       winnerId: null,
       finishOrder: [],
+      pendingFinishOrder: [],
+      surrenderedId: null,
       eventLog: [],
       nextEventId: 1,
     },
@@ -237,21 +264,31 @@ function dealCards(room) {
 }
 
 function updateWinner(room) {
+  if (room.game.pendingFinishOrder.length > 0) {
+    room.game.winnerId = null;
+    return;
+  }
+
   if (activePlayers(room) <= 1) {
     room.game.started = false;
-    room.game.winnerId = room.players.find((player) => player.hand.length === 0)?.id || null;
+    room.game.winnerId = room.game.finishOrder[0] || null;
   } else {
     room.game.winnerId = null;
   }
 }
 
 function rankingsFor(room) {
-  const finishedIds = new Set(room.game.finishOrder);
+  const finishedIds = finishedPlayerIds(room);
+  const pendingIds = pendingFinishIds(room);
+  const surrenderedId = room.game.surrenderedId;
   const finishedPlayers = room.game.finishOrder
     .map((playerId) => room.players.find((player) => player.id === playerId))
     .filter(Boolean);
+  const surrenderedPlayer = surrenderedId
+    ? room.players.find((player) => player.id === surrenderedId)
+    : null;
   const unfinishedPlayers = room.players
-    .filter((player) => !finishedIds.has(player.id))
+    .filter((player) => !finishedIds.has(player.id) && player.id !== surrenderedId)
     .sort((left, right) => {
       if (left.hand.length !== right.hand.length) {
         return left.hand.length - right.hand.length;
@@ -259,11 +296,13 @@ function rankingsFor(room) {
       return left.name.localeCompare(right.name);
     });
 
-  return [...finishedPlayers, ...unfinishedPlayers].map((player, index) => ({
+  return [...finishedPlayers, ...unfinishedPlayers, ...(surrenderedPlayer ? [surrenderedPlayer] : [])].map((player, index) => ({
     rank: index + 1,
     id: player.id,
     name: player.name,
     handCount: player.hand.length,
+    finished: finishedIds.has(player.id),
+    pendingFinish: pendingIds.has(player.id),
     isViewer: false,
   }));
 }
@@ -302,6 +341,51 @@ function startGame(room) {
   room.game.lastResolution = null;
   room.game.winnerId = null;
   room.game.finishOrder = [];
+  room.game.pendingFinishOrder = [];
+  room.game.surrenderedId = null;
+}
+
+function markPendingFinish(room, playerId) {
+  if (room.game.finishOrder.includes(playerId) || room.game.pendingFinishOrder.includes(playerId)) {
+    return;
+  }
+  const player = room.players.find((entry) => entry.id === playerId);
+  if (player?.hand.length === 0) {
+    room.game.pendingFinishOrder.push(playerId);
+  }
+}
+
+function settlePendingFinishes(room) {
+  if (!room.game.pendingFinishOrder.length) {
+    return;
+  }
+
+  const nextPendingOrder = [];
+  for (const playerId of room.game.pendingFinishOrder) {
+    const player = room.players.find((entry) => entry.id === playerId);
+    if (!player) {
+      continue;
+    }
+    if (player.hand.length === 0) {
+      if (!room.game.finishOrder.includes(playerId)) {
+        room.game.finishOrder.push(playerId);
+      }
+      continue;
+    }
+    nextPendingOrder.push(playerId);
+  }
+  room.game.pendingFinishOrder = nextPendingOrder;
+}
+
+function roundLeaderIndex(room, leaderId) {
+  const leaderIndex = playerIndex(room, leaderId);
+  if (leaderIndex === -1) {
+    return -1;
+  }
+  if (room.players[leaderIndex].hand.length > 0 || activePlayers(room) < 1) {
+    return leaderIndex;
+  }
+  return nextActivePlayer(room, leaderIndex);
 }
 
 function currentPlayFor(room) {
@@ -332,10 +416,17 @@ function roomStateFor(room, viewerId) {
   const viewer = room.players.find((player) => player.id === viewerId);
   const actorId = room.game.lastPlay?.actorId || null;
   const currentPlayerEntry = currentPlayer(room);
+  const activePlayerCount = activePlayers(room);
   const canAct = room.game.started && currentPlayerEntry?.id === viewerId && !room.game.revealState;
   const canChallenge = canAct && Boolean(room.game.lastPlay) && actorId !== viewerId;
   const canPass = canAct && Boolean(room.game.lastPlay) && actorId !== viewerId;
   const canPlay = canAct;
+  const canSurrender =
+    room.game.started &&
+    !room.game.revealState &&
+    activePlayerCount === 2 &&
+    Boolean(viewer) &&
+    viewer.hand.length > 0;
   const pendingChallenge = room.game.lastPlay
     ? {
         actorId: room.game.lastPlay.actorId,
@@ -350,6 +441,8 @@ function roomStateFor(room, viewerId) {
     ...entry,
     isViewer: entry.id === viewerId,
   }));
+  const finishedIds = finishedPlayerIds(room);
+  const pendingIds = pendingFinishIds(room);
 
   return {
     roomCode: room.code,
@@ -365,13 +458,15 @@ function roomStateFor(room, viewerId) {
       isHost: player.id === room.hostId,
       isViewer: player.id === viewerId,
       isTurn: room.game.started && index === room.game.currentPlayerIndex,
-      finished: room.game.started && player.hand.length === 0,
+      finished: finishedIds.has(player.id),
+      pendingFinish: pendingIds.has(player.id),
     })),
     hand: (viewer?.hand || []).map((card) => ({ ...card, label: cardLabel(card) })),
     tableCount: room.game.tableCards.length + (room.game.lastPlay?.cards.length || 0),
     currentPlay: currentPlayFor(room),
     currentRank: room.game.currentRank,
     currentPlayerId: currentPlayerEntry?.id || null,
+    activePlayerCount,
     pendingChallenge,
     canStart:
       viewerId === room.hostId &&
@@ -382,6 +477,7 @@ function roomStateFor(room, viewerId) {
     canPlay,
     canChallenge,
     canPass,
+    canSurrender,
     lastAction: room.game.lastAction
       ? {
           actorName: room.game.lastAction.actorName,
@@ -458,14 +554,16 @@ function collectAllTableCards(room, playerId) {
 }
 
 function beginNextRound(room, leaderId, resolutionText) {
-  const leaderIndex = playerIndex(room, leaderId);
+  settlePendingFinishes(room);
+  updateWinner(room);
+
+  const leaderIndex = roundLeaderIndex(room, leaderId);
   if (leaderIndex === -1) {
     return;
   }
   clearRoundState(room);
   room.game.currentPlayerIndex = leaderIndex;
   room.game.lastResolution = resolutionText;
-  updateWinner(room);
   broadcastRoom(room);
 }
 
@@ -475,7 +573,7 @@ function clearTableForRoundWinner(room, leaderId) {
 }
 
 function advanceAfterPass(room) {
-  const nextIndex = nextActivePlayer(room, room.game.currentPlayerIndex);
+  const nextIndex = nextResponderIndex(room, room.game.currentPlayerIndex);
   const nextPlayerId = room.players[nextIndex]?.id;
   if (nextPlayerId && nextPlayerId === room.game.lastPlay?.actorId) {
     clearTableForRoundWinner(room, nextPlayerId);
@@ -566,9 +664,7 @@ function playCards(room, playerId, cardIds, declaredRank) {
   });
 
   player.hand = player.hand.filter((card) => !uniqueIds.includes(card.id));
-  if (player.hand.length === 0 && !room.game.finishOrder.includes(player.id)) {
-    room.game.finishOrder.push(player.id);
-  }
+  markPendingFinish(room, player.id);
   if (room.game.lastPlay) {
     room.game.tableCards.push(...room.game.lastPlay.cards);
   }
@@ -647,6 +743,139 @@ function renamePlayer(room, playerId, name) {
   player.name = name;
 }
 
+function ensureFinished(room, playerId) {
+  if (!playerId || room.game.finishOrder.includes(playerId)) {
+    return;
+  }
+  room.game.finishOrder.push(playerId);
+}
+
+function removePlayerReferences(room, playerId) {
+  room.game.finishOrder = room.game.finishOrder.filter((id) => id !== playerId);
+  room.game.pendingFinishOrder = room.game.pendingFinishOrder.filter((id) => id !== playerId);
+  if (room.game.surrenderedId === playerId) {
+    room.game.surrenderedId = null;
+  }
+  if (room.game.revealState || room.game.lastPlay?.actorId === playerId) {
+    clearRoundState(room);
+    room.game.lastAction = null;
+  }
+}
+
+function normalizeCurrentPlayerIndex(room) {
+  if (!room.players.length) {
+    room.game.currentPlayerIndex = 0;
+    return;
+  }
+  if (room.game.currentPlayerIndex >= room.players.length) {
+    room.game.currentPlayerIndex = room.players.length - 1;
+  }
+  if (room.game.currentPlayerIndex < 0) {
+    room.game.currentPlayerIndex = 0;
+  }
+}
+
+function settleGameAfterPlayerExit(room, resolutionText) {
+  if (!room.game.started) {
+    return;
+  }
+  clearDecisionTimer(room);
+  clearRevealTimer(room);
+  room.game.revealState = null;
+
+  const remainingActivePlayers = activePlayerEntries(room);
+  if (remainingActivePlayers.length === 1) {
+    ensureFinished(room, remainingActivePlayers[0].id);
+  }
+
+  room.game.started = false;
+  room.game.winnerId = room.game.finishOrder[0] || remainingActivePlayers[0]?.id || null;
+  room.game.currentRank = null;
+  room.game.tableCards = [];
+  room.game.lastPlay = null;
+  room.game.lastAction = null;
+  room.game.lastResolution = resolutionText;
+}
+
+function leaveRoom(room, playerId) {
+  const index = playerIndex(room, playerId);
+  if (index === -1) {
+    return false;
+  }
+
+  const wasCurrentPlayer = room.game.started && room.game.currentPlayerIndex === index;
+  removePlayerReferences(room, playerId);
+  room.players.splice(index, 1);
+
+  if (!room.players.length) {
+    clearRoundState(room);
+    rooms.delete(room.code);
+    return true;
+  }
+
+  if (room.hostId === playerId) {
+    room.hostId = room.players[0].id;
+  }
+
+  if (room.game.started) {
+    if (index < room.game.currentPlayerIndex) {
+      room.game.currentPlayerIndex -= 1;
+    }
+    normalizeCurrentPlayerIndex(room);
+
+    if (activePlayers(room) <= 1) {
+      settleGameAfterPlayerExit(room, "有玩家退出房间，本局已直接结算。");
+    } else if (wasCurrentPlayer && !room.game.lastPlay) {
+      room.game.currentPlayerIndex %= room.players.length;
+      room.game.lastResolution = "当前行动玩家已退出，轮到下一位继续。";
+    } else {
+      room.game.lastResolution = "有玩家退出了房间。";
+    }
+  }
+
+  broadcastRoom(room);
+  return true;
+}
+
+function surrender(room, playerId) {
+  if (!room.game.started) {
+    throw new Error("游戏尚未开始");
+  }
+  if (room.game.revealState) {
+    throw new Error("当前正在结算公开牌面");
+  }
+
+  const player = room.players.find((entry) => entry.id === playerId);
+  if (!player || player.hand.length === 0) {
+    throw new Error("当前不能投降");
+  }
+
+  const remainingActivePlayers = activePlayerEntries(room);
+  if (remainingActivePlayers.length !== 2) {
+    throw new Error("仅剩两名玩家时才能投降");
+  }
+
+  const winner = remainingActivePlayers.find((entry) => entry.id !== playerId);
+  if (!winner) {
+    throw new Error("无法确定获胜玩家");
+  }
+
+  clearDecisionTimer(room);
+  clearRevealTimer(room);
+  room.game.revealState = null;
+  room.game.currentRank = null;
+  room.game.tableCards = [];
+  room.game.lastPlay = null;
+  room.game.lastAction = null;
+  room.game.pendingFinishOrder = [];
+  ensureFinished(room, winner.id);
+  room.game.surrenderedId = playerId;
+  room.game.started = false;
+  room.game.winnerId = room.game.finishOrder[0] || winner.id;
+  room.game.lastResolution = `${player.name} 已投降，${winner.name} 获得残局胜位，本局直接结算。`;
+  broadcastRoom(room);
+}
+
 function handleDisconnect(playerId) {
   const client = clients.get(playerId);
   if (!client) {
@@ -689,6 +918,14 @@ function handleDisconnect(playerId) {
 }
 
 function handleAuthedMessage(ws, room, playerId, message) {
+  if (message.type === "leave-room") {
+    leaveRoom(room, playerId);
+    clients.delete(playerId);
+    ws.playerId = null;
+    send(ws, { type: "left-room" });
+    return;
+  }
+
   if (message.type === "start-game") {
     if (room.hostId !== playerId) {
       throw new Error("只有房主可以开始游戏");
@@ -713,6 +950,11 @@ function handleAuthedMessage(ws, room, playerId, message) {
 
   if (message.type === "pass-window") {
     passTurn(room, playerId);
+    return;
+  }
+
+  if (message.type === "surrender") {
+    surrender(room, playerId);
     return;
   }
 

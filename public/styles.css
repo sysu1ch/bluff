@@ -157,6 +157,14 @@ label {
   margin-bottom: 20px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .topbar h2 {
   margin: 0.3rem 0 0;
   font-size: 2rem;
@@ -506,6 +514,11 @@ label {
 
   .topbar {
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 

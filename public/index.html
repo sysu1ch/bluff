@@ -50,19 +50,22 @@
             <p class="eyebrow">房间</p>
             <h2 id="roomTitle">-----</h2>
           </div>
-          <div class="room-meta">
-            <div class="badge">
-              <span>目标人数</span>
-              <strong id="maxPlayersLabel">4</strong>
+          <div class="topbar-actions">
+            <div class="room-meta">
+              <div class="badge">
+                <span>目标人数</span>
+                <strong id="maxPlayersLabel">4</strong>
+              </div>
+              <div class="badge">
+                <span>牌堆</span>
+                <strong id="tableCount">0</strong>
+              </div>
+              <div class="badge">
+                <span>本轮牌面</span>
+                <strong id="currentRank">待选</strong>
+              </div>
             </div>
-            <div class="badge">
-              <span>牌堆</span>
-              <strong id="tableCount">0</strong>
-            </div>
-            <div class="badge">
-              <span>本轮牌面</span>
-              <strong id="currentRank">待选</strong>
-            </div>
+            <button id="leaveRoomBtn" class="ghost" type="button">退出房间</button>
           </div>
         </div>
 
@@ -77,9 +80,9 @@
               <p class="eyebrow">我的昵称</p>
               <label>
                 昵称
-                <input id="renameName" maxlength="16" placeholder="大厅期可修改昵称" />
+                <input id="renameName" maxlength="16" placeholder="大厅阶段可修改昵称" />
               </label>
-              <p id="renameHint" class="helper-text">大厅期可修改昵称，开局后会锁定。</p>
+              <p id="renameHint" class="helper-text">大厅阶段可修改昵称，开局后会锁定。</p>
               <button id="renameBtn" type="submit" class="ghost">修改昵称</button>
             </form>
             <div class="status-card">
@@ -97,6 +100,7 @@
               <div class="section-head">
                 <h3>牌桌</h3>
                 <div class="actions">
+                  <button id="surrenderBtn" class="danger hidden" type="button">投降</button>
                   <button id="challengeBtn" class="danger">质疑</button>
                   <button id="passBtn" class="secondary">不出</button>
                 </div>

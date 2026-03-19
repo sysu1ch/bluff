@@ -34,6 +34,8 @@ const elements = {
   resolutionText: document.getElementById("resolutionText"),
   turnText: document.getElementById("turnText"),
   pileCards: document.getElementById("pileCards"),
+  leaveRoomBtn: document.getElementById("leaveRoomBtn"),
+  surrenderBtn: document.getElementById("surrenderBtn"),
   challengeBtn: document.getElementById("challengeBtn"),
   passBtn: document.getElementById("passBtn"),
   playForm: document.getElementById("playForm"),
@@ -107,6 +109,29 @@ function showToast(message) {
   showToast.timer = setTimeout(() => {
     elements.toast.classList.add("hidden");
   }, 2400);
+}
+
+function resetTransientUiState() {
+  clearInterval(state.countdownTimer);
+  state.countdownTimer = null;
+  clearTimeout(state.activeEventTimer);
+  state.activeEventTimer = null;
+  state.activeEventId = null;
+  state.selectedCards.clear();
+  state.seenEventIds = new Set();
+  state.eventQueue = [];
+  state.dismissedResultKey = null;
+  state.activeResultKey = null;
+  elements.eventOverlay.classList.add("hidden");
+  elements.resultModal.classList.add("hidden");
+  setSelectionInfo();
+}
+
+function showLobby() {
+  state.room = null;
+  resetTransientUiState();
+  elements.roomView.classList.add("hidden");
+  elements.lobbyView.classList.remove("hidden");
 }
 
 function trimSeenEvents() {
@@ -308,6 +333,8 @@ function renderStatus() {
   const currentPlay = state.room.currentPlay;
   const pending = state.room.pendingChallenge;
   const turnPlayer = state.room.players.find((player) => player.isTurn);
+  const viewer = currentViewer();
+  const showSurrender = state.room.status === "playing" && state.room.activePlayerCount === 2 && viewer?.handCount > 0;
 
   elements.roomTitle.textContent = state.room.roomCode;
   elements.maxPlayersLabel.textContent = state.room.maxPlayers;
@@ -344,6 +371,8 @@ function renderStatus() {
   elements.passBtn.disabled = !state.room.canPass;
   elements.passBtn.textContent = state.room.canPass ? `不出 (${countdownText()}s)` : "不出";
   elements.startGameBtn.disabled = !state.room.canStart;
+  elements.surrenderBtn.classList.toggle("hidden", !showSurrender);
+  elements.surrenderBtn.disabled = !state.room.canSurrender;
 
   const disablePlay = !state.room.canPlay || currentPlay?.status === "revealed";
   elements.declaredRank.disabled = disablePlay || Boolean(state.room.currentRank);
@@ -437,6 +466,12 @@ socket.addEventListener("message", (event) => {
   const message = JSON.parse(event.data);
   if (message.type === "error") {
     showToast(message.message);
+    return;
+  }
+
+  if (message.type === "left-room") {
+    showLobby();
+    showToast("已退出房间");
     return;
   }
 
@@ -544,6 +579,14 @@ elements.renameForm.addEventListener("submit", (event) => {
 
 elements.startGameBtn.addEventListener("click", () => {
   send({ type: "start-game" });
+});
+
+elements.leaveRoomBtn.addEventListener("click", () => {
+  send({ type: "leave-room" });
+});
+
+elements.surrenderBtn.addEventListener("click", () => {
+  send({ type: "surrender" });
 });
 
 elements.challengeBtn.addEventListener("click", () => {
