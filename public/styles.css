@@ -149,6 +149,52 @@ label {
   margin-top: 16px;
 }
 
+.network-card {
+  margin-top: 18px;
+  padding: 22px;
+}
+
+.network-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.network-list.compact {
+  margin-top: 12px;
+}
+
+.network-row {
+  display: grid;
+  grid-template-columns: minmax(0, 150px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.network-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.network-meta strong {
+  font-size: 0.95rem;
+}
+
+.network-meta span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.network-row a {
+  color: var(--secondary);
+  word-break: break-all;
+}
+
 .topbar {
   display: flex;
   align-items: flex-start;
@@ -253,6 +299,13 @@ label {
   justify-content: space-between;
   gap: 8px;
   font-weight: 700;
+}
+
+.player-badges {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .pill {
@@ -550,6 +603,10 @@ label {
     border-radius: 24px;
     padding: 18px 20px;
     font-size: clamp(1.25rem, 6vw, 1.8rem);
+  }
+
+  .network-row {
+    grid-template-columns: 1fr;
   }
 
   .result-card {

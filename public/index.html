@@ -42,6 +42,15 @@
             <button type="submit">加入</button>
           </form>
         </div>
+
+        <div id="networkCard" class="card network-card hidden">
+          <div class="section-head">
+            <h2>局域网加入</h2>
+            <span id="networkStatus" class="pill">检测中</span>
+          </div>
+          <p class="helper-text">如果你现在打开的是 `localhost`，朋友需要改用下面的局域网地址访问。</p>
+          <div id="networkList" class="network-list"></div>
+        </div>
       </section>
 
       <section id="roomView" class="hidden">
@@ -92,6 +101,11 @@
             <div class="status-card">
               <p class="eyebrow">裁定</p>
               <p id="resolutionText">暂无。</p>
+            </div>
+            <div id="roomNetworkCard" class="status-card hidden">
+              <p class="eyebrow">局域网分享</p>
+              <p class="helper-text">让其他设备和你访问同一个地址与端口，再输入房间码加入。</p>
+              <div id="roomNetworkList" class="network-list compact"></div>
             </div>
           </aside>
 

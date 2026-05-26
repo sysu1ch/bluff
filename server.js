@@ -1,5 +1,6 @@
 const path = require("path");
 const crypto = require("crypto");
+const os = require("os");
 const express = require("express");
 const http = require("http");
 const { WebSocketServer } = require("ws");
@@ -10,6 +11,8 @@ const wss = new WebSocketServer({ server });
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
+const PUBLIC_HOST = process.env.PUBLIC_HOST ? String(process.env.PUBLIC_HOST).trim() : "";
+const PUBLIC_PORT = Number(process.env.PUBLIC_PORT) || PORT;
 const rooms = new Map();
 const clients = new Map();
 
@@ -25,9 +28,65 @@ const MIN_PLAYERS = 2;
 const MAX_NAME_LENGTH = 16;
 const REVEAL_MS = 2000;
 const DECISION_MS = 20000;
+const EMPTY_ROOM_TTL_MS = 60000;
 const MAX_EVENT_LOG = 16;
 
 app.use(express.static(path.join(__dirname, "public")));
+
+function collectReachableUrls() {
+  const urls = [];
+  const seen = new Set();
+
+  function isLikelyVirtualInterface(name) {
+    return /(vmware|virtualbox|vbox|hyper-v|vethernet|docker|loopback|tailscale|zerotier|tap|tun|npcap|wireguard|outline)/i.test(name);
+  }
+
+  function pushUrl(label, host) {
+    if (!host) {
+      return;
+    }
+    const normalizedHost = String(host).trim();
+    if (!normalizedHost) {
+      return;
+    }
+    const url = `http://${normalizedHost}:${PUBLIC_PORT}`;
+    if (seen.has(url)) {
+      return;
+    }
+    seen.add(url);
+    urls.push({ label, host: normalizedHost, url });
+  }
+
+  pushUrl("本机", "localhost");
+
+  if (PUBLIC_HOST) {
+    pushUrl("外部访问", PUBLIC_HOST);
+    return urls;
+  }
+
+  const interfaces = os.networkInterfaces();
+  for (const [name, addresses] of Object.entries(interfaces)) {
+    if (isLikelyVirtualInterface(name)) {
+      continue;
+    }
+    for (const address of addresses || []) {
+      if (address.internal || address.family !== "IPv4") {
+        continue;
+      }
+      pushUrl(name, address.address);
+    }
+  }
+
+  return urls;
+}
+
+app.get("/api/network-info", (_req, res) => {
+  res.json({
+    port: PUBLIC_PORT,
+    host: PUBLIC_HOST || HOST,
+    urls: collectReachableUrls(),
+  });
+});
 
 function shuffle(items) {
   const deck = [...items];
@@ -97,6 +156,18 @@ function activePlayerEntries(room) {
   return room.players.filter((player) => player.hand.length > 0);
 }
 
+function canTakeTurn(player) {
+  return Boolean(player?.connected && player.hand.length > 0);
+}
+
+function turnPlayers(room) {
+  return room.players.filter(canTakeTurn);
+}
+
+function respondersFor(room, actorId) {
+  return room.players.filter((player) => player.id !== actorId && canTakeTurn(player));
+}
+
 function finishedPlayerIds(room) {
   return new Set(room.game.finishOrder);
 }
@@ -109,7 +180,7 @@ function nextActivePlayer(room, currentIndex) {
   const total = room.players.length;
   for (let step = 1; step <= total; step += 1) {
     const index = (currentIndex + step) % total;
-    if (room.players[index].hand.length > 0) {
+    if (canTakeTurn(room.players[index])) {
       return index;
     }
   }
@@ -122,7 +193,7 @@ function nextResponderIndex(room, currentIndex) {
   for (let step = 1; step <= total; step += 1) {
     const index = (currentIndex + step) % total;
     const player = room.players[index];
-    if (player.id === actorId || player.hand.length > 0) {
+    if (player.id === actorId || canTakeTurn(player)) {
       return index;
     }
   }
@@ -144,6 +215,7 @@ function createRoom(playerId, name, maxPlayers) {
     hostId: playerId,
     maxPlayers,
     players: [{ id: playerId, name, hand: [], connected: true }],
+    emptyTimer: null,
     game: {
       started: false,
       currentPlayerIndex: 0,
@@ -167,6 +239,23 @@ function createRoom(playerId, name, maxPlayers) {
   };
   rooms.set(code, room);
   return room;
+}
+
+function clearEmptyRoomTimer(room) {
+  if (room.emptyTimer) {
+    clearTimeout(room.emptyTimer);
+    room.emptyTimer = null;
+  }
+}
+
+function scheduleEmptyRoomCleanup(room) {
+  clearEmptyRoomTimer(room);
+  room.emptyTimer = setTimeout(() => {
+    if (room.players.every((entry) => !entry.connected)) {
+      clearRoundState(room);
+      rooms.delete(room.code);
+    }
+  }, EMPTY_ROOM_TTL_MS);
 }
 
 function pushGameEvent(room, event) {
@@ -245,6 +334,7 @@ function joinRoom(room, playerId, name) {
   if (room.game.started) {
     throw new Error("游戏已经开始");
   }
+  clearEmptyRoomTimer(room);
   room.players.push({ id: playerId, name, hand: [], connected: true });
 }
 
@@ -382,7 +472,7 @@ function roundLeaderIndex(room, leaderId) {
   if (leaderIndex === -1) {
     return -1;
   }
-  if (room.players[leaderIndex].hand.length > 0 || activePlayers(room) < 1) {
+  if (canTakeTurn(room.players[leaderIndex]) || activePlayers(room) < 1) {
     return leaderIndex;
   }
   return nextActivePlayer(room, leaderIndex);
@@ -417,7 +507,11 @@ function roomStateFor(room, viewerId) {
   const actorId = room.game.lastPlay?.actorId || null;
   const currentPlayerEntry = currentPlayer(room);
   const activePlayerCount = activePlayers(room);
-  const canAct = room.game.started && currentPlayerEntry?.id === viewerId && !room.game.revealState;
+  const canAct =
+    room.game.started &&
+    Boolean(viewer?.connected) &&
+    currentPlayerEntry?.id === viewerId &&
+    !room.game.revealState;
   const canChallenge = canAct && Boolean(room.game.lastPlay) && actorId !== viewerId;
   const canPass = canAct && Boolean(room.game.lastPlay) && actorId !== viewerId;
   const canPlay = canAct;
@@ -639,9 +733,6 @@ function playCards(room, playerId, cardIds, declaredRank) {
   if (!Array.isArray(cardIds) || cardIds.length < 1) {
     throw new Error("至少选择一张牌");
   }
-  if (false && cardIds.length > 4) {
-    throw new Error("单次最多出四张牌");
-  }
   if (!RANKS.includes(declaredRank)) {
     throw new Error("声明牌面无效");
   }
@@ -690,9 +781,15 @@ function playCards(room, playerId, cardIds, declaredRank) {
     declaredCount: cards.length,
   });
   room.game.lastResolution = null;
+  updateWinner(room);
+
+  if (room.game.started && respondersFor(room, player.id).length === 0) {
+    clearTableForRoundWinner(room, player.id);
+    return;
+  }
+
   room.game.currentPlayerIndex = nextActivePlayer(room, room.game.currentPlayerIndex);
   scheduleDecision(room);
-  updateWinner(room);
   broadcastRoom(room);
 }
 
@@ -808,6 +905,7 @@ function leaveRoom(room, playerId) {
   room.players.splice(index, 1);
 
   if (!room.players.length) {
+    clearEmptyRoomTimer(room);
     clearRoundState(room);
     rooms.delete(room.code);
     return true;
@@ -876,9 +974,9 @@ function surrender(room, playerId) {
   broadcastRoom(room);
 }
 
-function handleDisconnect(playerId) {
+function handleDisconnect(playerId, ws) {
   const client = clients.get(playerId);
-  if (!client) {
+  if (!client || client.ws !== ws) {
     return;
   }
 
@@ -899,8 +997,7 @@ function handleDisconnect(playerId) {
   }
 
   if (room.players.every((entry) => !entry.connected)) {
-    clearRoundState(room);
-    rooms.delete(room.code);
+    scheduleEmptyRoomCleanup(room);
     return;
   }
 
@@ -914,6 +1011,31 @@ function handleDisconnect(playerId) {
     }
   }
 
+  broadcastRoom(room);
+}
+
+function reconnectRoom(ws, roomCode, playerId) {
+  const room = rooms.get(String(roomCode || "").trim().toUpperCase());
+  if (!room) {
+    throw new Error("房间不存在");
+  }
+
+  const player = room.players.find((entry) => entry.id === playerId);
+  if (!player) {
+    throw new Error("无法恢复玩家身份");
+  }
+
+  const previousClient = clients.get(playerId);
+  if (previousClient?.ws && previousClient.ws !== ws) {
+    previousClient.ws.playerId = null;
+    previousClient.ws.close();
+  }
+
+  player.connected = true;
+  clearEmptyRoomTimer(room);
+  clients.set(playerId, { ws, roomCode: room.code });
+  ws.playerId = playerId;
+  send(ws, { type: "state", state: roomStateFor(room, playerId) });
   broadcastRoom(room);
 }
 
@@ -1013,6 +1135,11 @@ function handleMessage(ws, raw) {
       return;
     }
 
+    if (message.type === "reconnect-room") {
+      reconnectRoom(ws, message.roomCode, message.playerId);
+      return;
+    }
+
     if (!ws.playerId) {
       throw new Error("请先加入房间");
     }
@@ -1033,11 +1160,18 @@ wss.on("connection", (ws) => {
   ws.on("message", (raw) => handleMessage(ws, raw));
   ws.on("close", () => {
     if (ws.playerId) {
-      handleDisconnect(ws.playerId);
+      handleDisconnect(ws.playerId, ws);
     }
   });
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Hu Pai server running at http://${HOST}:${PORT}`);
+  const urls = collectReachableUrls();
+  console.log(`Hu Pai server listening on ${HOST}:${PORT}`);
+  if (urls.length) {
+    console.log("Open one of these URLs:");
+    for (const item of urls) {
+      console.log(`- [${item.label}] ${item.url}`);
+    }
+  }
 });

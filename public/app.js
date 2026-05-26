@@ -1,9 +1,11 @@
 const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
 
 const NAME_STORAGE_KEY = "hu-pai-name";
+const SESSION_STORAGE_KEY = "hu-pai-session";
 
 const state = {
   room: null,
+  networkInfo: null,
   selectedCards: new Set(),
   countdownTimer: null,
   seenEventIds: new Set(),
@@ -55,6 +57,11 @@ const elements = {
   resultTitle: document.getElementById("resultTitle"),
   resultRankings: document.getElementById("resultRankings"),
   toast: document.getElementById("toast"),
+  networkCard: document.getElementById("networkCard"),
+  networkStatus: document.getElementById("networkStatus"),
+  networkList: document.getElementById("networkList"),
+  roomNetworkCard: document.getElementById("roomNetworkCard"),
+  roomNetworkList: document.getElementById("roomNetworkList"),
 };
 
 for (const rank of ranks) {
@@ -72,6 +79,35 @@ function saveName(name) {
   if (name) {
     localStorage.setItem(NAME_STORAGE_KEY, name);
   }
+}
+
+function saveSession(room) {
+  if (!room?.roomCode || !room?.viewerId) {
+    return;
+  }
+  localStorage.setItem(
+    SESSION_STORAGE_KEY,
+    JSON.stringify({
+      roomCode: room.roomCode,
+      playerId: room.viewerId,
+    })
+  );
+}
+
+function readSession() {
+  try {
+    const session = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || "null");
+    if (session?.roomCode && session?.playerId) {
+      return session;
+    }
+  } catch {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  }
+  return null;
+}
+
+function clearSession() {
+  localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
 function syncNameInputs(name, source) {
@@ -111,6 +147,76 @@ function showToast(message) {
   }, 2400);
 }
 
+function normalizeHost(host) {
+  return String(host || "").trim().toLowerCase();
+}
+
+function isLocalPageHost() {
+  const host = normalizeHost(location.hostname);
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+function renderNetworkLinks(container, urls) {
+  container.innerHTML = "";
+  for (const item of urls) {
+    const row = document.createElement("div");
+    row.className = "network-row";
+
+    const meta = document.createElement("div");
+    meta.className = "network-meta";
+
+    const label = document.createElement("strong");
+    label.textContent = item.label;
+
+    const helper = document.createElement("span");
+    helper.textContent = item.host;
+
+    meta.append(label, helper);
+
+    const link = document.createElement("a");
+    link.href = item.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = item.url;
+
+    row.append(meta, link);
+    container.appendChild(row);
+  }
+}
+
+function renderNetworkInfo() {
+  const urls = state.networkInfo?.urls || [];
+  const externalUrls = urls.filter((item) => normalizeHost(item.host) !== "localhost");
+  const preferredUrls = externalUrls.length ? externalUrls : urls;
+  const shouldShowCard = preferredUrls.length > 0 && (isLocalPageHost() || externalUrls.length > 0);
+
+  elements.networkCard.classList.toggle("hidden", !shouldShowCard);
+  elements.roomNetworkCard.classList.toggle("hidden", !shouldShowCard);
+
+  if (!shouldShowCard) {
+    elements.networkList.innerHTML = "";
+    elements.roomNetworkList.innerHTML = "";
+    return;
+  }
+
+  elements.networkStatus.textContent = externalUrls.length ? "可联机" : "仅本机";
+  renderNetworkLinks(elements.networkList, preferredUrls);
+  renderNetworkLinks(elements.roomNetworkList, preferredUrls);
+}
+
+async function loadNetworkInfo() {
+  try {
+    const response = await fetch("/api/network-info", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("failed");
+    }
+    state.networkInfo = await response.json();
+  } catch {
+    state.networkInfo = { urls: [] };
+  }
+  renderNetworkInfo();
+}
+
 function resetTransientUiState() {
   clearInterval(state.countdownTimer);
   state.countdownTimer = null;
@@ -132,6 +238,7 @@ function showLobby() {
   resetTransientUiState();
   elements.roomView.classList.add("hidden");
   elements.lobbyView.classList.remove("hidden");
+  renderNetworkInfo();
 }
 
 function trimSeenEvents() {
@@ -224,15 +331,27 @@ function renderPlayers() {
       !player.connected ? "离线" : "",
     ].filter(Boolean);
 
-    node.innerHTML = `
-      <div class="player-name">
-        <span>${player.name}</span>
-        <span>${player.handCount} 张</span>
-      </div>
-      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-        ${badges.map((badge) => `<span class="pill">${badge}</span>`).join("")}
-      </div>
-    `;
+    const nameRow = document.createElement("div");
+    nameRow.className = "player-name";
+
+    const name = document.createElement("span");
+    name.textContent = player.name;
+
+    const handCount = document.createElement("span");
+    handCount.textContent = `${player.handCount} 张`;
+
+    nameRow.append(name, handCount);
+
+    const badgeRow = document.createElement("div");
+    badgeRow.className = "player-badges";
+    for (const badge of badges) {
+      const badgeNode = document.createElement("span");
+      badgeNode.className = "pill";
+      badgeNode.textContent = badge;
+      badgeRow.appendChild(badgeNode);
+    }
+
+    node.append(nameRow, badgeRow);
     elements.playersList.appendChild(node);
   }
 }
@@ -275,10 +394,14 @@ function renderHand() {
       cardNode.classList.add("selected");
     }
 
-    cardNode.innerHTML = `
-      <input type="checkbox" ${state.selectedCards.has(card.id) ? "checked" : ""} />
-      <strong>${card.label}</strong>
-    `;
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = state.selectedCards.has(card.id);
+
+    const label = document.createElement("strong");
+    label.textContent = card.label;
+
+    cardNode.append(input, label);
 
     cardNode.addEventListener("click", (event) => {
       event.preventDefault();
@@ -288,10 +411,6 @@ function renderHand() {
       if (state.selectedCards.has(card.id)) {
         state.selectedCards.delete(card.id);
       } else {
-        if (false && state.selectedCards.size >= 4) {
-          showToast("单次最多选 4 张");
-          return;
-        }
         state.selectedCards.add(card.id);
       }
       setSelectionInfo();
@@ -402,19 +521,23 @@ function renderResultModal() {
   const rankings = state.room.rankings || [];
   const winner = rankings[0];
   elements.resultTitle.textContent = `${winner?.isViewer ? "你" : winner?.name || "有玩家"} 获胜`;
-  elements.resultRankings.innerHTML = rankings
-    .map((entry) => {
-      const suffix = entry.handCount === 0 ? "已出完" : `剩 ${entry.handCount} 张`;
-      const name = entry.isViewer ? "你" : entry.name;
-      return `
-        <div class="result-rank-row ${entry.rank === 1 ? "top" : ""}">
-          <span>#${entry.rank}</span>
-          <strong>${name}</strong>
-          <span>${suffix}</span>
-        </div>
-      `;
-    })
-    .join("");
+  elements.resultRankings.innerHTML = "";
+  for (const entry of rankings) {
+    const row = document.createElement("div");
+    row.className = `result-rank-row ${entry.rank === 1 ? "top" : ""}`;
+
+    const rank = document.createElement("span");
+    rank.textContent = `#${entry.rank}`;
+
+    const name = document.createElement("strong");
+    name.textContent = entry.isViewer ? "你" : entry.name;
+
+    const suffix = document.createElement("span");
+    suffix.textContent = entry.handCount === 0 ? "已出完" : `剩 ${entry.handCount} 张`;
+
+    row.append(rank, name, suffix);
+    elements.resultRankings.appendChild(row);
+  }
   elements.resultModal.classList.remove("hidden");
   state.activeResultKey = modalKey;
 }
@@ -445,6 +568,7 @@ function renderRoom() {
   renderHand();
   renderStatus();
   renderRenameSection();
+  renderNetworkInfo();
   syncCountdownTimer();
   setSelectionInfo();
 
@@ -460,16 +584,28 @@ function renderRoom() {
 
 socket.addEventListener("open", () => {
   showToast("连接已建立");
+  const session = readSession();
+  if (session) {
+    send({
+      type: "reconnect-room",
+      roomCode: session.roomCode,
+      playerId: session.playerId,
+    });
+  }
 });
 
 socket.addEventListener("message", (event) => {
   const message = JSON.parse(event.data);
   if (message.type === "error") {
+    if (!state.room && ["房间不存在", "无法恢复玩家身份"].includes(message.message)) {
+      clearSession();
+    }
     showToast(message.message);
     return;
   }
 
   if (message.type === "left-room") {
+    clearSession();
     showLobby();
     showToast("已退出房间");
     return;
@@ -490,6 +626,7 @@ socket.addEventListener("message", (event) => {
       elements.resultModal.classList.add("hidden");
     }
     state.room = nextRoom;
+    saveSession(state.room);
     const handIds = new Set(state.room.hand.map((card) => card.id));
     for (const id of [...state.selectedCards]) {
       if (!handIds.has(id)) {
@@ -620,3 +757,4 @@ elements.clearSelectionBtn.addEventListener("click", () => {
 });
 
 bootstrapStoredName();
+loadNetworkInfo();
